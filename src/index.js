@@ -1,5 +1,5 @@
 // src/index.js
-const { parseQuery, parseQueryWhere,parseQuerySix,parseWhereClauseSeven,parseQueryEight}  = require('./queryParser');
+const { parseQuery, parseQueryWhere,parseQuerySix,parseQuerySeven,parseQueryEight,parseQueryNine,parseQueryTen}  = require('./queryParser');
 const readCSV = require('./csvReader');
 
 async function executeSELECTQuery(query) {
@@ -79,22 +79,21 @@ async function executeSELECTQuerySix(query) {
         return selectedRow;
     });
 }
-async function executeSELECTQuerySeven(query) {
-    const { fields, table, whereClauses } = parseWhereClauseSeven(query);
-    const data = await readCSV(`${table}.csv`);
-
-    function evaluateCondition(row, clause) {
-        const { field, operator, value } = clause;
-        switch (operator) {
-            case '=': return row[field] === value;
-            case '!=': return row[field] !== value;
-            case '>': return row[field] > value;
-            case '<': return row[field] < value;
-            case '>=': return row[field] >= value;
-            case '<=': return row[field] <= value;
-            default: throw new Error(`Unsupported operator: ${operator}`);
-        }
+function evaluateCondition(row, clause) {
+    const { field, operator, value } = clause;
+    switch (operator) {
+        case '=': return row[field] === value;
+        case '!=': return row[field] !== value;
+        case '>': return row[field] > value;
+        case '<': return row[field] < value;
+        case '>=': return row[field] >= value;
+        case '<=': return row[field] <= value;
+        default: throw new Error(`Unsupported operator: ${operator}`);
     }
+}
+async function executeSELECTQuerySeven(query) {
+     const { fields, table, whereClauses } = parseQuerySeven(query);
+     const data = await readCSV(`${table}.csv`);
 
     // Apply WHERE clause filtering
     const filteredData = whereClauses.length > 0
@@ -112,7 +111,7 @@ async function executeSELECTQuerySeven(query) {
 }
 
 async function executeSELECTQueryEight(query) {
-    // Now we will have joinTable, joinCondition in the parsed query
+            // Now we will have joinTable, joinCondition in the parsed query
         const { fields, table, whereClauses, joinTable, joinCondition } = parseQueryEight(query);
         let data = await readCSV(`${table}.csv`);
 
@@ -138,10 +137,10 @@ async function executeSELECTQueryEight(query) {
 
         // Apply WHERE clause filtering after JOIN (or on the original data if no join)
         const filteredData = whereClauses.length > 0
-            ? data.filter(row => whereClauses.every(clause => executeSELECTQuerySeven(row, clause)))
+            ? data.filter(row => whereClauses.every(clause => evaluateCondition(row, clause)))
             : data;
 
-        filteredData.map(row => {
+        return filteredData.map(row => {
                 const selectedRow = {};
                 fields.forEach(field => {
                     // Assuming 'field' is just the column name without table prefix
@@ -152,6 +151,206 @@ async function executeSELECTQueryEight(query) {
 });
 }
 
+function performInnerJoin(data, joinData, joinCondition, fields, table) {
+    // Logic for INNER JOIN
+    return data.flatMap(mainRow => {
+        return joinData
+            .filter(joinRow => {
+                const mainValue = mainRow[joinCondition.left.split('.')[1]];
+                const joinValue = joinRow[joinCondition.right.split('.')[1]];
+                return mainValue === joinValue;
+            })
+            .map(joinRow => {
+                return fields.reduce((acc, field) => {
+                    const [tableName, fieldName] = field.split('.');
+                    acc[field] = tableName === table ? mainRow[fieldName] : joinRow[fieldName];
+                    return acc;
+                }, {});
+            });
+    });
+    // ...
+}
+
+function performLeftJoin(data, joinData, joinCondition, fields, table) {
+    return data.map(mainRow => {
+        const matchingRows = joinData.filter(joinRow => mainRow[joinCondition.left.split('.')[1]] === joinRow[joinCondition.right.split('.')[1]]);
+        if (matchingRows.length > 0) {
+            return fields.reduce((acc, field) => {
+                const [tableName, fieldName] = field.split('.');
+                acc[field] = tableName === table ? mainRow[fieldName] : matchingRows[0][fieldName];
+                return acc;
+            }, {});
+        } else {
+            return fields.reduce((acc, field) => {
+                const [tableName, fieldName] = field.split('.');
+                acc[field] = tableName === table ? mainRow[fieldName] : null;
+                return acc;
+            }, {});
+        }
+    });
+    // ...
+}
+
+function performRightJoin(data, joinData, joinCondition, fields, table) {
+    // Logic for RIGHT JOIN
+    return joinData.map(joinRow => {
+        const matchingRows = data.filter(mainRow => mainRow[joinCondition.left.split('.')[1]] === joinRow[joinCondition.right.split('.')[1]]);
+        if (matchingRows.length > 0) {
+            return fields.reduce((acc, field) => {
+                const [tableName, fieldName] = field.split('.');
+                acc[field] = tableName === table ? matchingRows[0][fieldName] : joinRow[fieldName];
+                return acc;
+            }, {});
+        } else {
+            return fields.reduce((acc, field) => {
+                const [tableName, fieldName] = field.split('.');
+                acc[field] = tableName === table ? null : joinRow[fieldName];
+                return acc;
+            }, {});
+        }
+    });
+    // ...
+}
+
+async function executeSELECTQueryNine(query) {
+    const { fields, table, whereClauses, joinType, joinTable, joinCondition } = parseQueryNine(query);
+    let data = await readCSV(`${table}.csv`);
+
+    // Logic for applying JOINs
+    if (joinTable && joinCondition) {
+        const joinData = await readCSV(`${joinTable}.csv`);
+        switch (joinType.toUpperCase()) {
+            case 'INNER':
+                data = performInnerJoin(data, joinData, joinCondition, fields, table);
+                break;
+            case 'LEFT':
+                data = performLeftJoin(data, joinData, joinCondition, fields, table);
+                break;
+            case 'RIGHT':
+                data = performRightJoin(data, joinData, joinCondition, fields, table);
+                break;
+            // Handle default case or unsupported JOIN types
+            default:
+                throw new Error(`Unsupported JOIN type: ${joinType}`);
+        }
+    }
+
+    // Apply WHERE clause filtering after JOIN (or on the original data if no join)
+    const filteredData = whereClauses.length > 0
+    ? data.filter(row => whereClauses.every(clause => evaluateCondition(row, clause)))
+    : data;
+
+    return filteredData.map(row => {
+        const selectedRow = {};
+        fields.forEach(field => {
+            // Assuming 'field' is just the column name without table prefix
+            selectedRow[field] = row[field];
+        });
+        return selectedRow;
+});
+}
+
+function applyGroupBy(data, groupByFields, aggregateFunctions) {
+    // Implement logic to group data and calculate aggregates
+     const groupedData = data.reduce((groups, row) => {
+        // Generate a key for the group based on the values of groupByFields
+        const key = groupByFields.map(field => row[field]).join(',');
+
+        // Initialize the group if it doesn't exist
+        if (!groups[key]) {
+            groups[key] = [];
+        }
+
+        // Add the row to the group
+        groups[key].push(row);
+
+        return groups;
+    }, {});
+
+    // Apply aggregate functions to each group
+    const aggregatedData = Object.keys(groupedData).map(key => {
+        const group = groupedData[key];
+        const aggregatedRow = {};
+
+        // Add group by fields to the aggregated row
+        groupByFields.forEach(field => {
+            aggregatedRow[field] = group[0][field];
+        });
+
+        // Calculate aggregates for each aggregate function
+        aggregateFunctions.forEach(aggregateFunction => {
+            const { field, operation } = aggregateFunction;
+            switch (operation.toUpperCase()) {
+                case 'COUNT':
+                    aggregatedRow[`COUNT(${field})`] = group.length;
+                    break;
+                case 'SUM':
+                    aggregatedRow[`SUM(${field})`] = group.reduce((sum, row) => sum + parseFloat(row[field] || 0), 0);
+                    break;
+                // Add cases for other aggregate functions like AVG, MAX, MIN
+                case 'AVG':
+                    aggregatedRow[`AVG(${field})`] = group.reduce((sum, row) => sum + parseFloat(row[field] || 0), 0) / group.length;
+                    break;
+                case 'MAX':
+                    aggregatedRow[`MAX(${field})`] = Math.max(...group.map(row => parseFloat(row[field] || 0)));
+                    break;
+                case 'MIN':
+                    aggregatedRow[`MIN(${field})`] = Math.min(...group.map(row => parseFloat(row[field] || 0)));
+                    break;
+                default:
+                    throw new Error(`Unsupported aggregate function: ${operation}`);
+            }
+        });
+
+        return aggregatedRow;
+    });
+
+    return aggregatedData;
+    // ...
+}
+async function executeSELECTQueryTen(query) {
+    const { fields, table, whereClauses, joinType, joinTable, joinCondition, groupByFields } = parseQueryTen(query);
+    let data = await readCSV(`${table}.csv`);
+
+    // ...existing logic for JOINs and WHERE clause...
+    if (joinTable && joinCondition) {
+        const joinData = await readCSV(`${joinTable}.csv`);
+        switch (joinType.toUpperCase()) {
+            case 'INNER':
+                data = performInnerJoin(data, joinData, joinCondition, fields, table);
+                break;
+            case 'LEFT':
+                data = performLeftJoin(data, joinData, joinCondition, fields, table);
+                break;
+            case 'RIGHT':
+                data = performRightJoin(data, joinData, joinCondition, fields, table);
+                break;
+            // Handle default case or unsupported JOIN types
+            default:
+                throw new Error(`Unsupported JOIN type: ${joinType}`);
+        }
+    }
+
+    // Apply WHERE clause filtering after JOIN (or on the original data if no join)
+    const filteredData = whereClauses.length > 0
+    ? data.filter(row => whereClauses.every(clause => evaluateCondition(row, clause)))
+    : data;
+
+    if (groupByFields) {
+        data = applyGroupBy(data, groupByFields, fields);
+    }
+
+    // ...existing logic for field selection...
+    return filteredData.map(row => {
+        const selectedRow = {};
+        fields.forEach(field => {
+            // Assuming 'field' is just the column name without table prefix
+            selectedRow[field] = row[field];
+        });
+        return selectedRow;
+});
+}
+
 
 module.exports = {
     executeSELECTQuery,
@@ -159,5 +358,7 @@ module.exports = {
     executeSELECTQuerywhere,
     executeSELECTQuerySix,
     executeSELECTQuerySeven,
-    executeSELECTQueryEight
+    executeSELECTQueryEight,
+    executeSELECTQueryNine,
+    executeSELECTQueryTen
 };
